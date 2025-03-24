@@ -2,10 +2,11 @@
 
 import { usePeopleStore, peopleStoreActions } from "./use-people-store";
 import React from "react";
+import { VList } from "virtua";
 const sleep = (time: number) => new Promise((res) => setTimeout(res, time));
 
 export function PeopleGrid_() {
-  const people = usePeopleStore((state) => state.people);
+  const people = usePeopleStore((state) => state.state.people);
 
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 mt-6 max-h-[80vh] overflow-y-auto shadow-md">
@@ -14,17 +15,22 @@ export function PeopleGrid_() {
       </h2>
       <button
         onClick={async () => {
-          for (let i = 1; i < 100; i++) {
-            await sleep(20);
-            peopleStoreActions.adjustNetWorths(1000);
+          for (let i = 0; i < 100; i++) {
+            await sleep(200);
+            peopleStoreActions.randomizePeople();
           }
         }}
-        className="bg-red"
+        className="bg-orange-600 hover:bg-orange-500 text-black font-semibold py-2 px-4 rounded mb-4 transition-colors duration-200"
       >
-        Shuffle
+        <span>
+          {"Update all 100,000 people net worths every 200ms 100 times"}
+        </span>
       </button>
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-        {people.map((person) => (
+      <VList
+        className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4"
+        style={{ height: "300px" }}
+      >
+        {people.slice(0, 100).map((person) => (
           <div
             key={person.id}
             className="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:shadow-lg transition-all"
@@ -48,7 +54,7 @@ export function PeopleGrid_() {
             </div>
           </div>
         ))}
-      </div>
+      </VList>
     </div>
   );
 }

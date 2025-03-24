@@ -65,6 +65,68 @@ function matchPatternOrKey<T>(key: string, patterns: (keyof T | RegExp)[]) {
   return false;
 }
 
+// A faster check that doesn't need to stringify the entire object
+function isSerializable(obj: any, seen = new WeakSet()): boolean {
+  // Handle primitives and null
+  if (obj === null || obj === undefined) return true;
+  if (typeof obj !== "object")
+    return typeof obj !== "function" && typeof obj !== "symbol";
+
+  // Detect circular references
+  if (seen.has(obj)) return false;
+  seen.add(obj);
+
+  // Check special objects that can't be cloned
+  if (
+    obj instanceof Error ||
+    obj instanceof WeakMap ||
+    obj instanceof WeakSet ||
+    obj instanceof Map ||
+    obj instanceof Set ||
+    obj instanceof Promise ||
+    obj instanceof RegExp ||
+    obj instanceof Date
+  ) {
+    return true; // These are actually serializable by structured clone
+  }
+
+  // Check all object properties
+  return Object.keys(obj).every((key) => isSerializable(obj[key], seen));
+}
+
+// Add this deep equality function somewhere in your file
+function deepEqual(a: any, b: any): boolean {
+  // Handle primitive types and referential equality
+  if (a === b) return true;
+
+  // If either is null or not an object, they can't be equal at this point
+  if (
+    a === null ||
+    b === null ||
+    typeof a !== "object" ||
+    typeof b !== "object"
+  )
+    return false;
+
+  // Arrays require special handling
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((item, index) => deepEqual(item, b[index]));
+  }
+
+  // Compare object keys
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+
+  if (keysA.length !== keysB.length) return false;
+
+  // Check if every key-value in a has a match in b
+  return keysA.every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key])
+  );
+}
+
 /**
  * Exported helper that wraps Zustand's create() with our sync middleware.
  *
@@ -81,12 +143,13 @@ function matchPatternOrKey<T>(key: string, patterns: (keyof T | RegExp)[]) {
  * <Mos extends [StoreMutatorIdentifier, unknown][] = []>(initializer: StateCreator<T, [], Mos>) =>
  *   UseBoundStore<Mutate<StoreApi<T>, Mos>>
  */
-export const createWithSync = <T extends Record<string, any>>(options?: {
+export const createWithSync = <T extends Record<string, any>>(options: {
   exclude?: (keyof T | RegExp)[];
+  name: string;
 }) => {
   // We'll compute the channel name based on the initial state later.
   const syncOptions: SyncTabsOptionsType<T> = {
-    name: "",
+    name: options.name,
     exclude: options?.exclude,
   };
 
@@ -95,8 +158,7 @@ export const createWithSync = <T extends Record<string, any>>(options?: {
   ): UseBoundStore<Mutate<StoreApi<T>, Mos>> => {
     return create<T>()((set, get, api) => {
       // Compute a deterministic channel name from the initial state.
-      const initialState = api.getInitialState();
-      syncOptions.name = hashState(initialState);
+
       const instanceId = Math.random().toString(36).slice(2);
       const channel = getSyncChannel(syncOptions.name);
 
@@ -127,15 +189,40 @@ export const createWithSync = <T extends Record<string, any>>(options?: {
         }
       };
 
+      // Create a memoization cache outside the loop
+      const serializableCache = new WeakMap<object, boolean>();
+
       const getKeysToSync = (): string[] => {
         const currentState = get() as Record<string, any>;
         return Object.keys(currentState).filter((key) => {
+          // First handle exclusions
           if (
             syncOptions.exclude &&
             matchPatternOrKey(key, syncOptions.exclude)
           )
             return false;
-          if (typeof currentState[key] === "function") return false;
+
+          const value = currentState[key];
+          if (typeof value === "function") return false;
+
+          // Check objects with memoization
+          if (value && typeof value === "object") {
+            // Check cache first
+            if (serializableCache.has(value)) {
+              return serializableCache.get(value);
+            }
+
+            try {
+              // Still use JSON.stringify but cache the result
+              JSON.stringify(value);
+              serializableCache.set(value, true);
+              return true;
+            } catch (e) {
+              serializableCache.set(value, false);
+              return false;
+            }
+          }
+
           return true;
         });
       };
@@ -172,7 +259,26 @@ export const createWithSync = <T extends Record<string, any>>(options?: {
             payload: fullState,
           });
         } else if (message.type === STATE_UPDATE) {
-          set((prev: any) => ({ ...prev, ...message.payload }));
+          // Get current state
+          const currentState = get();
+
+          // Create an object to hold only changed fields
+          const changedFields: Record<string, any> = {};
+
+          // // Check each field in payload against current state
+          // Object.keys(message.payload).forEach((key) => {
+          //   // Only include if the field has actually changed (deep comparison)
+          //   // if (!deepEqual(message.payload[key], currentState[key])) {
+          //   changedFields[key] = message.payload[key];
+          //   // }
+          // });
+
+          // Only update state if there are actual changes
+          if (Object.keys(changedFields).length > 0 || true) {
+            set((prev: any) => ({ ...prev, ...message.payload }));
+          } else {
+            console.log("STATE_UPDATE (no fields changed, skipping update)");
+          }
         }
       });
 

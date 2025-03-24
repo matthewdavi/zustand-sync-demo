@@ -21,13 +21,15 @@ interface Person {
   netWorth: number;
 }
 
-export const usePeopleStore = createWithSync<PeopleStore>()((set, get) => ({
+export const usePeopleStore = createWithSync<PeopleStore>({
+  name: "people-store",
+})((set, get) => ({
   state: {
-    people: Array.from({ length: 1000 }, () => ({
+    people: Array.from({ length: 100_000 }, () => ({
       id: faker.string.uuid(),
       name: faker.person.fullName(),
       netWorth: faker.number.float({ min: 0, max: 1_000_000 }),
-    })),
+    })).sort((a, b) => b.netWorth - a.netWorth),
   },
   actions: {
     addPerson: () =>
@@ -52,9 +54,11 @@ export const usePeopleStore = createWithSync<PeopleStore>()((set, get) => ({
     updateNetWorth: (id, amount) =>
       set((state) => ({
         state: {
-          people: state.state.people.map((p) =>
-            p.id === id ? { ...p, netWorth: p.netWorth + amount } : p
-          ),
+          people: state.state.people
+            .map((p) =>
+              p.id === id ? { ...p, netWorth: p.netWorth + amount } : p
+            )
+            .sort((a, b) => b.netWorth - a.netWorth),
         },
       })),
     randomizePeople: () => {

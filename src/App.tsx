@@ -41,6 +41,21 @@ export function App() {
     }
   };
 
+  const handleSyncLoop = () => {
+    const startTime = performance.now();
+    let iterations = 0;
+
+    while (performance.now() - startTime < 1000) {
+      increment();
+    }
+
+    console.log(`Completed ${iterations} increments in 1 second`);
+  };
+
+  const handleResetCount = () => {
+    useSharedStore.getState().resetCount();
+  };
+
   return (
     <main className="min-h-screen bg-black text-white font-mono p-8">
       <div className="flex justify-center space-x-6 mb-8">
@@ -98,12 +113,26 @@ export function App() {
               <span>{"Decrement with Delay"}</span>
             </button>
           </div>
+          <button
+            onClick={handleSyncLoop}
+            className="w-full bg-purple-600 hover:bg-purple-500 text-black font-semibold py-2 rounded mt-2"
+          >
+            <span>
+              {"1-Second Blocking Increment (compute syncs / second)"}
+            </span>
+          </button>
+          <button
+            onClick={handleResetCount}
+            className="w-full bg-yellow-600 hover:bg-yellow-500 text-black font-semibold py-2 rounded mt-2"
+          >
+            <span>{"Reset Count to Zero"}</span>
+          </button>
           <div className="text-xl text-red-400">Count: {count}</div>
         </div>
 
         <div className="space-y-1">
           <label className="block text-xs uppercase tracking-wider text-gray-400">
-            User Name
+            Type some stuff in here to test the responsiveness
           </label>
           <input
             type="text"
@@ -115,7 +144,7 @@ export function App() {
 
         <div className="space-y-1">
           <label className="block text-xs uppercase tracking-wider text-gray-400">
-            Delay (ms)
+            Increment Delay (ms)
           </label>
           <input
             type="number"
@@ -124,7 +153,7 @@ export function App() {
               useSharedStore.getState().setDelay(Number(e.target.value))
             }
             className="w-full bg-black text-white border border-gray-600 px-3 py-1 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
-            min={1}
+            min={0}
           />
         </div>
 

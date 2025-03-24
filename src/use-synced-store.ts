@@ -9,9 +9,10 @@ interface MyStore {
   name: string;
   setDelay: (newTime: number) => void;
   delay: number;
+  resetCount: () => void;
 }
 
-export const useSharedStore = createWithSync<MyStore>()(
+export const useSharedStore = createWithSync<MyStore>({ name: "shared-store" })(
   immer((set) => ({
     count: 0,
     increment: () =>
@@ -22,6 +23,10 @@ export const useSharedStore = createWithSync<MyStore>()(
       set((state) => {
         state.count -= 1;
       }),
+    resetCount: () =>
+      set((state) => {
+        state.count = 0;
+      }),
     delay: 20,
     name: "",
     setName: (newName: string) =>
@@ -30,7 +35,7 @@ export const useSharedStore = createWithSync<MyStore>()(
       }),
     setDelay: (newTime: number) =>
       set((state) => {
-        state.delay = Math.max(1, newTime);
+        state.delay = Math.max(0, newTime);
       }),
   }))
 );
