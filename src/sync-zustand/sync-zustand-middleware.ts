@@ -1,3 +1,5 @@
+/* eslint-disable no-plusplus */
+/* eslint-disable no-bitwise */
 import {
   StateCreator,
   StoreApi,
@@ -16,24 +18,36 @@ export interface SyncTabsOptionsType<T> {
 const LOAD = "LOAD";
 const STATE_UPDATE = "STATE_UPDATE";
 
-// A simple djb2-hash to compute a deterministic string from a JSON string.
+interface SyncChannel {
+  postMessage: (msg: any) => void;
+  onMessage: (handler: (msg: any) => void) => void;
+}
+/**
+ * Compute a deterministic hash string using the djb2 algorithm on the given string.
+ * Returns a prefixed hexadecimal hash used to uniquely identify a channel.
+ */
 function hashStr(str: string): string {
   let hash = 5381;
   for (let i = 0; i < str.length; i++) {
     hash = (hash * 33) ^ str.charCodeAt(i);
   }
-  return "channel-" + (hash >>> 0).toString(16);
+  return `channel-${(hash >>> 0).toString(16)}`;
 }
 
+/**
+ * Generate a deterministic hash for an object by converting it to JSON.
+ * Useful for comparing states across different instances.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// @ts-ignore
 function hashState(obj: any): string {
   return hashStr(JSON.stringify(obj));
 }
 
-interface SyncChannel {
-  postMessage: (message: any) => void;
-  onMessage: (handler: (message: any) => void) => void;
-}
-
+/**
+ * Retrieve a communication channel for state synchronization.
+ * Uses BroadcastChannel if available; otherwise, falls back to Electron’s API.
+ */
 function getSyncChannel(name: string): SyncChannel | null {
   if (typeof BroadcastChannel !== "undefined") {
     const channel = new BroadcastChannel(name);
@@ -43,7 +57,8 @@ function getSyncChannel(name: string): SyncChannel | null {
         channel.onmessage = (event: MessageEvent) => handler(event.data);
       },
     };
-  } else if (typeof window !== "undefined" && (window as any).electronAPI) {
+  }
+  if (typeof window !== "undefined" && (window as any).electronAPI) {
     return {
       postMessage: (msg: any) => (window as any).electronAPI.send(name, msg),
       onMessage: (handler: (msg: any) => void) => {
@@ -56,71 +71,64 @@ function getSyncChannel(name: string): SyncChannel | null {
   return null;
 }
 
+/**
+ * Check if the given key matches any of the provided exclusion patterns.
+ * Supports both string and RegExp matching.
+ */
 function matchPatternOrKey<T>(key: string, patterns: (keyof T | RegExp)[]) {
   for (const patternOrKey of patterns) {
-    if (typeof patternOrKey === "string" && key === patternOrKey) return true;
-    else if (patternOrKey instanceof RegExp && patternOrKey.test(key))
+    if (typeof patternOrKey === "string" && key === patternOrKey) {
       return true;
+    }
+    if (patternOrKey instanceof RegExp && patternOrKey.test(key)) {
+      return true;
+    }
   }
   return false;
 }
 
-// A faster check that doesn't need to stringify the entire object
-function isSerializable(obj: any, seen = new WeakSet()): boolean {
-  // Handle primitives and null
-  if (obj === null || obj === undefined) return true;
-  if (typeof obj !== "object")
-    return typeof obj !== "function" && typeof obj !== "symbol";
+/**
+ * Check if an object is serializable via structuredClone.
+ * Uses structuredClone to verify cloneability, which supports Maps, Sets, etc.
+ */
 
-  // Detect circular references
-  if (seen.has(obj)) return false;
-  seen.add(obj);
-
-  // Check special objects that can't be cloned
-  if (
-    obj instanceof Error ||
-    obj instanceof WeakMap ||
-    obj instanceof WeakSet ||
-    obj instanceof Map ||
-    obj instanceof Set ||
-    obj instanceof Promise ||
-    obj instanceof RegExp ||
-    obj instanceof Date
-  ) {
-    return true; // These are actually serializable by structured clone
+/**
+ * Deeply compare two values for equality.
+ * Recursively checks objects and arrays to confirm structural equality.
+ */
+// @ts-expect-error
+function deepEqual(a: any, b: any): boolean {
+  // Handle primitive types and identical references.
+  if (a === b) {
+    return true;
   }
 
-  // Check all object properties
-  return Object.keys(obj).every((key) => isSerializable(obj[key], seen));
-}
-
-// Add this deep equality function somewhere in your file
-function deepEqual(a: any, b: any): boolean {
-  // Handle primitive types and referential equality
-  if (a === b) return true;
-
-  // If either is null or not an object, they can't be equal at this point
+  // If either value is null or not an object, they are not equal.
   if (
     a === null ||
     b === null ||
     typeof a !== "object" ||
     typeof b !== "object"
-  )
+  ) {
     return false;
+  }
 
-  // Arrays require special handling
+  // Special handling for arrays.
   if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
+    if (a.length !== b.length) {
+      return false;
+    }
     return a.every((item, index) => deepEqual(item, b[index]));
   }
 
-  // Compare object keys
+  // Compare object keys.
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) {
+    return false;
+  }
 
-  if (keysA.length !== keysB.length) return false;
-
-  // Check if every key-value in a has a match in b
+  // Ensure every key/value in a exists and matches in b.
   return keysA.every(
     (key) =>
       Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key])
@@ -128,26 +136,15 @@ function deepEqual(a: any, b: any): boolean {
 }
 
 /**
- * Exported helper that wraps Zustand's create() with our sync middleware.
+ * Exported helper that wraps Zustand's create() with state synchronization middleware.
  *
- * Usage:
- *
- * const useSharedStore = createWithSync<MyStore>()(
- *   immer((set) => ({
- *     count: 0,
- *     increment: () => set(state => { state.count += 1 }),
- *   }))
- * );
- *
- * The returned type exactly matches the curried version of create<T>(), i.e.
- * <Mos extends [StoreMutatorIdentifier, unknown][] = []>(initializer: StateCreator<T, [], Mos>) =>
- *   UseBoundStore<Mutate<StoreApi<T>, Mos>>
+ * This function intercepts state updates and sends diffs to other instances via a sync channel.
  */
 export const createWithSync = <T extends Record<string, any>>(options: {
   exclude?: (keyof T | RegExp)[];
   name: string;
 }) => {
-  // We'll compute the channel name based on the initial state later.
+  // Setup options for synchronization based on provided parameters.
   const syncOptions: SyncTabsOptionsType<T> = {
     name: options.name,
     exclude: options?.exclude,
@@ -155,10 +152,9 @@ export const createWithSync = <T extends Record<string, any>>(options: {
 
   return <Mos extends [StoreMutatorIdentifier, unknown][]>(
     initializer: StateCreator<T, [], Mos>
-  ): UseBoundStore<Mutate<StoreApi<T>, Mos>> => {
-    return create<T>()((set, get, api) => {
-      // Compute a deterministic channel name from the initial state.
-
+  ): UseBoundStore<Mutate<StoreApi<T>, Mos>> =>
+    create<T>()((set, get, api) => {
+      // Create a unique instance identifier.
       const instanceId = Math.random().toString(36).slice(2);
       const channel = getSyncChannel(syncOptions.name);
 
@@ -171,6 +167,10 @@ export const createWithSync = <T extends Record<string, any>>(options: {
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
       const flushInterval = 50; // milliseconds
 
+      /**
+       * Flush pending state changes over the sync channel.
+       * Sends accumulated differences and resets the pending diff object.
+       */
       const flushDiff = () => {
         if (Object.keys(pendingDiff).length > 0) {
           channel.postMessage({
@@ -183,38 +183,46 @@ export const createWithSync = <T extends Record<string, any>>(options: {
         flushTimer = null;
       };
 
+      /**
+       * Schedule a flush of pending state differences if not already scheduled.
+       * This batches state updates to send them at a controlled interval.
+       */
       const scheduleFlush = () => {
         if (flushTimer === null) {
           flushTimer = setTimeout(flushDiff, flushInterval);
         }
       };
 
-      // Create a memoization cache outside the loop
+      // Cache for memoizing structuredClone checks for object serializability.
       const serializableCache = new WeakMap<object, boolean>();
 
+      /**
+       * Determine which keys in the current state should be synchronized.
+       * Filters out functions, excluded keys, and non-cloneable values.
+       */
       const getKeysToSync = (): string[] => {
         const currentState = get() as Record<string, any>;
         return Object.keys(currentState).filter((key) => {
-          // First handle exclusions
+          // Exclude keys matching provided patterns.
           if (
             syncOptions.exclude &&
             matchPatternOrKey(key, syncOptions.exclude)
-          )
+          ) {
             return false;
+          }
 
           const value = currentState[key];
-          if (typeof value === "function") return false;
+          if (typeof value === "function") {
+            return false;
+          }
 
-          // Check objects with memoization
+          // For objects, check cloneability using structuredClone.
           if (value && typeof value === "object") {
-            // Check cache first
             if (serializableCache.has(value)) {
               return serializableCache.get(value);
             }
-
             try {
-              // Still use JSON.stringify but cache the result
-              JSON.stringify(value);
+              structuredClone(value);
               serializableCache.set(value, true);
               return true;
             } catch (e) {
@@ -227,15 +235,21 @@ export const createWithSync = <T extends Record<string, any>>(options: {
         });
       };
 
-      // On startup, request full state from other windows.
+      // On startup, request the full state from other instances.
       channel.postMessage({ type: LOAD, source: instanceId });
 
+      /**
+       * Custom set function wrapping the original state update.
+       * Records state differences for synchronization across tabs or windows.
+       */
       const customSet: typeof set = (stateOrFn, replace?) => {
         const prevState = get();
         set(stateOrFn, replace);
         const currentState = get();
         const keysToSync = getKeysToSync();
-        if (keysToSync.length === 0) return;
+        if (keysToSync.length === 0) {
+          return;
+        }
         keysToSync.forEach((key) => {
           if (currentState[key] !== prevState[key]) {
             pendingDiff[key] = currentState[key];
@@ -244,8 +258,15 @@ export const createWithSync = <T extends Record<string, any>>(options: {
         scheduleFlush();
       };
 
+      /**
+       * Listen for incoming synchronization messages.
+       * For LOAD messages, send the full state; for STATE_UPDATE, merge incoming state changes.
+       * Note: The current deep comparison logic in the STATE_UPDATE handler is bypassed.
+       */
       channel.onMessage((message: any) => {
-        if (!message || message.source === instanceId) return;
+        if (!message || message.source === instanceId) {
+          return;
+        }
         if (message.type === LOAD) {
           const keysToSync = getKeysToSync();
           const currentState = get() as Record<string, any>;
@@ -259,22 +280,19 @@ export const createWithSync = <T extends Record<string, any>>(options: {
             payload: fullState,
           });
         } else if (message.type === STATE_UPDATE) {
-          // Get current state
           const currentState = get();
-
-          // Create an object to hold only changed fields
           const changedFields: Record<string, any> = {};
 
-          // // Check each field in payload against current state
-          // Object.keys(message.payload).forEach((key) => {
-          //   // Only include if the field has actually changed (deep comparison)
-          //   // if (!deepEqual(message.payload[key], currentState[key])) {
-          //   changedFields[key] = message.payload[key];
-          //   // }
-          // });
+          // we do a shallow equality check here to see if the state has changed
+          // this is a performance optimization to avoid deep equality checks
+          Object.keys(message.payload).forEach((key) => {
+            if (message.payload[key] !== currentState[key]) {
+              changedFields[key] = message.payload[key];
+            }
+          });
 
-          // Only update state if there are actual changes
-          if (Object.keys(changedFields).length > 0 || true) {
+          // I've found it faster to just update the state every time vs  doing the deep equality check
+          if (Object.keys(changedFields).length > 0) {
             set((prev: any) => ({ ...prev, ...message.payload }));
           } else {
             console.log("STATE_UPDATE (no fields changed, skipping update)");
@@ -284,5 +302,4 @@ export const createWithSync = <T extends Record<string, any>>(options: {
 
       return initializer(customSet, get, api);
     });
-  };
 };
